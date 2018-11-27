@@ -16,8 +16,8 @@
 #*/
 
 import __init__
-librocketmqclientpython import *
+from librocketmqclientpython import *
 
-def showClientVersion:
+def showClientVersion():
     print("Python Client Version:")
     print(GetVersion())
