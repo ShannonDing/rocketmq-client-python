@@ -41,20 +41,18 @@ SHARED_OBJ := $(filter-out %/dllmain.lo,$(patsubst %.cpp, %.lo, $(CPP_SRC)))
 VPATH:=$(CPP_SRCDIR)
 
 PYTHON_INCLUDE:=/usr/include/python2.7
-PYTHON_INCLUDE:=/System/Library/Frameworks/Python.framework/Versions/2.7/include/python2.7
 ROCKETMQ_INCLUDE:=/usr/local/include/rocketmq
 PYTHON_LIB:=/usr/python/bin
 PYTHON_LIBD:=/usr/python/lib
 ROCKETMQ_LIBD:=/usr/local/lib
-ROCKETMQ_LIBD:=/Users/shannon/package/mac/librocketmq
 CPPFLAGS := -I$(TOPDIR)/include \
 		    $(addprefix -I,$(CPP_SRCDIR)) \
 		    $(addprefix -I,$(ROCKETMQ_INCLUDE)) \
 			$(addprefix -I,$(PYTHON_INCLUDE))
 
-LDFLAGS := -shared -Wl, -pthread -fPIC
-LIBPATH := $(addprefix -L, $(ROCKETMQ_LIBD) $(PYTHON_LIBD))
-LDLIBS := $(addprefix -l,rocketmq boost_python27)
+LDFLAGS := -shared -Wl,-soname=librocketmqclientpython.so -pthread -fPIC
+LIBPATH := $(addprefix -L,$(ROCKETMQ_LIBD) $(PYTHON_LIBD))
+LDLIBS := $(addprefix -l,rocketmq boost_python)
 
 CXX := g++
 AR := ar
