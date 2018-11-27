@@ -102,7 +102,7 @@ include("cmake/ConfigureChecks.cmake")
 # a more elegant way of doing this; with SCons, when you check for the
 # lib, it is automatically passed to the linker.
 set(deplibs)
-
+#list(APPEND deplibs z)
 # For some reason, the check_function_exists macro doesn't detect
 # the inet_aton on some pure Unix platforms (e.g. sunos5). So we
 # need to do a more detailed check and also include some extra deplibs.
@@ -124,7 +124,8 @@ endif ()
 
 
 #set(Boost_USE_STATIC_LIBS "only find boost static libs" ON) # only find static libs
-set(Boost_USE_SHARED_LIBS "only find boost shared libs" ON) # only find shared libs
+option(Boost_USE_STATIC_LIBS "only find boost static libs" OFF) # only find static libs
+#set(Boost_USE_SHARED_LIBS "only find boost shared libs" ON) # only find shared libs
 
 if (WIN32)
     find_package(Boost REQUIRED COMPONENTS python)
@@ -152,8 +153,9 @@ endif ()
 #    message(FATAL_ERROR "Missing library: rocketmq")
 #endif ()
 
-set(ROCKETMQ_USE_STATIC_LIBS "only find rocketmq static libs" OFF) # only find static libs
-set(ROCKETMQ_USE_SHARED_LIBS "only find rocketmq shared libs" ON) # only find shared libs
+#set(ROCKETMQ_USE_STATIC_LIBS "only find rocketmq static libs" OFF) # only find static libs
+option(ROCKETMQ_USE_STATIC_LIBS "only find rocketmq static libs" OFF) # only find static libs
+#set(ROCKETMQ_USE_SHARED_LIBS "only find rocketmq shared libs" ON) # only find shared libs
 
 find_package(rocketmq)
 
