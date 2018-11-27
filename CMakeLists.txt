@@ -160,7 +160,7 @@ endif ()
 #endif ()
 
 #set(ROCKETMQ_USE_STATIC_LIBS "only find rocketmq static libs" OFF) # only find static libs
-option(ROCKETMQ_USE_STATIC_LIBS "only find rocketmq static libs" OFF) # only find static libs
+option(ROCKETMQ_USE_STATIC_LIBS "only find rocketmq static libs" ON) # only find static libs
 #set(ROCKETMQ_USE_SHARED_LIBS "only find rocketmq shared libs" ON) # only find shared libs
 
 find_package(rocketmq)
