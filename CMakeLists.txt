@@ -122,6 +122,12 @@ else () #not-HAVE_LIBDL
     message(FATAL_ERROR "Missing library: dl")
 endif ()
 
+check_library_exists(z compress "" HAVE_LIBZ)
+if (HAVE_LIBZ)
+    list(APPEND deplibs z)
+else () #not-HAVE_LIBDL
+    message(FATAL_ERROR "Missing library: z")
+endif ()
 
 #set(Boost_USE_STATIC_LIBS "only find boost static libs" ON) # only find static libs
 option(Boost_USE_STATIC_LIBS "only find boost static libs" OFF) # only find static libs
