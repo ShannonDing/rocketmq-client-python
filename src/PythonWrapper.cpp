@@ -21,6 +21,7 @@
 #include "CProducer.h"
 #include "CPushConsumer.h"
 #include "PythonWrapper.h"
+#include "CMQException.h"
 #include <boost/python.hpp>
 #include <map>
 
@@ -31,6 +32,8 @@ const char *VERSION =
         "PYTHON_CLIENT_VERSION: " PYTHON_CLIENT_VERSION ", BUILD DATE: " PYCLI_BUILD_DATE " ";
 
 map<CPushConsumer *, pair<PyObject *, object>> g_CallBackMap;
+map<CProducer *, PyObject *> g_TransactionCheckCallBackMap;
+
 
 class PyThreadStateLock {
 public:
@@ -93,6 +96,8 @@ int PySetMessageProperty(void *msg, const char *key, const char *value) {
 int PySetMessageDelayTimeLevel(void *msg, int level) {
     return SetDelayTimeLevel((CMessage *) msg, level);
 }
+
+
 //messageExt
 const char *PyGetMessageTopic(PyMessageExt msgExt) {
     return GetMessageTopic((CMessageExt *) msgExt.pMessageExt);
@@ -115,8 +120,30 @@ const char *PyGetMessageId(PyMessageExt msgExt) {
 
 //producer
 void *PyCreateProducer(const char *groupId) {
+    PyEval_InitThreads();  // ensure create GIL, for call Python callback from C.
     return (void *) CreateProducer(groupId);
 }
+
+void *PyCreateTransactionProducer(const char *groupId, PyObject *localTransactionCheckerCallback) {
+    PyEval_InitThreads();
+    CProducer *producer = CreateTransactionProducer(groupId, &PyLocalTransactionCheckerCallback, NULL);
+    g_TransactionCheckCallBackMap[producer] = localTransactionCheckerCallback;
+    return producer;
+}
+
+CTransactionStatus PyLocalTransactionCheckerCallback(CProducer *producer, CMessageExt *msg, void *data) {
+    PyThreadStateLock pyThreadLock;  // ensure hold GIL, before call python callback
+    PyMessageExt message = {.pMessageExt = msg};
+    map<CProducer *, PyObject *>::iterator iter;
+    iter = g_TransactionCheckCallBackMap.find(producer);
+    if (iter != g_TransactionCheckCallBackMap.end()) {
+        PyObject *pCallback = iter->second;
+        CTransactionStatus status = boost::python::call<CTransactionStatus>(pCallback, message);
+        return status;
+    }
+    return CTransactionStatus::E_UNKNOWN_TRANSACTION;
+}
+
 int PyDestroyProducer(void *producer) {
     return DestroyProducer((CProducer *) producer);
 }
@@ -124,6 +151,7 @@ int PyStartProducer(void *producer) {
     return StartProducer((CProducer *) producer);
 }
 int PyShutdownProducer(void *producer) {
+    PyThreadStateUnlock PyThreadUnlock;  // Shutdown Producer is a block call, ensure thread don't hold GIL.
     return ShutdownProducer((CProducer *) producer);
 }
 int PySetProducerNameServerAddress(void *producer, const char *namesrv) {
@@ -138,6 +166,25 @@ int PySetProducerInstanceName(void *producer, const char *instanceName) {
 int PySetProducerSessionCredentials(void *producer, const char *accessKey, const char *secretKey, const char *channel) {
     return SetProducerSessionCredentials((CProducer *)producer, accessKey, secretKey, channel);
 }
+int PySetProducerCompressLevel(void *producer, int level) {
+    return SetProducerCompressLevel((CProducer *)producer, level);
+}
+int PySetProducerMaxMessageSize(void *producer, int size) {
+    return SetProducerMaxMessageSize((CProducer *)producer, size);
+}
+int PySetProducerLogPath(void *producer, const char *logPath) {
+    return SetProducerLogPath((CProducer *) producer, logPath);
+}
+int PySetProducerLogFileNumAndSize(void *producer, int fileNum, long fileSize) {
+    return SetProducerLogFileNumAndSize((CProducer *) producer, fileNum, fileSize);
+}
+int PySetProducerLogLevel(void *producer, CLogLevel level) {
+    return SetProducerLogLevel((CProducer *) producer, level);
+}
+int PySetProducerSendMsgTimeout(void *producer, int timeout) {
+    return SetProducerSendMsgTimeout((CProducer *) producer, timeout);
+}
+
 PySendResult PySendMessageSync(void *producer, void *msg) {
     PySendResult ret;
     CSendResult result;
@@ -151,6 +198,94 @@ PySendResult PySendMessageSync(void *producer, void *msg) {
 
 int PySendMessageOneway(void *producer, void *msg) {
     return SendMessageOneway((CProducer *) producer, (CMessage *) msg);
+}
+
+void PySendSuccessCallback(CSendResult result, CMessage *msg, void *pyCallback) {
+    PyThreadStateLock PyThreadLock;  // ensure hold GIL, before call python callback
+    PySendResult sendResult;
+    sendResult.sendStatus = result.sendStatus;
+    sendResult.offset = result.offset;
+    strncpy(sendResult.msgId, result.msgId, MAX_MESSAGE_ID_LENGTH - 1);
+    sendResult.msgId[MAX_MESSAGE_ID_LENGTH - 1] = 0;
+    PyCallback *callback = (PyCallback *) pyCallback;
+    boost::python::call<void>(callback->successCallback, sendResult, (void *) msg);
+    delete pyCallback;
+}
+
+
+void PySendExceptionCallback(CMQException e, CMessage *msg, void *pyCallback) {
+    PyThreadStateLock PyThreadLock;  // ensure hold GIL, before call python callback
+    PyMQException exception;
+    PyCallback *callback = (PyCallback *) pyCallback;
+    exception.error = e.error;
+    exception.line = e.line;
+    strncpy(exception.file, e.file, MAX_EXEPTION_FILE_LENGTH - 1);
+    exception.file[MAX_EXEPTION_FILE_LENGTH - 1] = 0;
+    strncpy(exception.msg, e.msg, MAX_EXEPTION_MSG_LENGTH - 1);
+    exception.msg[MAX_EXEPTION_MSG_LENGTH - 1] = 0;
+    strncpy(exception.type, e.type, MAX_EXEPTION_TYPE_LENGTH - 1);
+    exception.type[MAX_EXEPTION_TYPE_LENGTH - 1] = 0;
+    boost::python::call<void>(callback->exceptionCallback, (void *) msg, exception);
+    delete pyCallback;
+}
+
+int PySendMessageAsync(void *producer, void *msg, PyObject *sendSuccessCallback, PyObject *sendExceptionCallback) {
+    PyCallback *pyCallback = new PyCallback();
+    pyCallback->successCallback = sendSuccessCallback;
+    pyCallback->exceptionCallback = sendExceptionCallback;
+    return SendAsync((CProducer *) producer, (CMessage *) msg, &PySendSuccessCallback, &PySendExceptionCallback,
+                     (void *) pyCallback);
+}
+
+
+PySendResult PySendMessageOrderly(void *producer, void *msg, int autoRetryTimes, void *args, PyObject *queueSelector) {
+    PySendResult ret;
+    CSendResult result;
+    PyUserData userData = {queueSelector, args};
+    SendMessageOrderly((CProducer *) producer, (CMessage *) msg, &PyOrderlyCallbackInner, &userData, autoRetryTimes,
+                       &result);
+    ret.sendStatus = result.sendStatus;
+    ret.offset = result.offset;
+    strncpy(ret.msgId, result.msgId, MAX_MESSAGE_ID_LENGTH - 1);
+    ret.msgId[MAX_MESSAGE_ID_LENGTH - 1] = 0;
+    return ret;
+}
+
+int PyOrderlyCallbackInner(int size, CMessage *msg, void *args) {
+    PyUserData *userData = (PyUserData *) args;
+    int index = boost::python::call<int>(userData->pyObject, size, (void *) msg, userData->pData);
+    return index;
+}
+
+PySendResult PySendMessageOrderlyByShardingKey(void *producer, void *msg, const char *shardingKey) {
+    PySendResult ret;
+    CSendResult result;
+    SendMessageOrderlyByShardingKey((CProducer *) producer, (CMessage *) msg, shardingKey, &result);
+    ret.sendStatus = result.sendStatus;
+    ret.offset = result.offset;
+    strncpy(ret.msgId, result.msgId, MAX_MESSAGE_ID_LENGTH - 1);
+    ret.msgId[MAX_MESSAGE_ID_LENGTH - 1] = 0;
+    return ret;
+}
+
+CTransactionStatus PyLocalTransactionExecuteCallback(CProducer *producer, CMessage *msg, void *data) {
+    PyUserData *localCallback = (PyUserData *) data;
+    CTransactionStatus status = boost::python::call<CTransactionStatus>(localCallback->pyObject, (void *) msg,
+                                                                        localCallback->pData);
+    return status;
+}
+
+PySendResult PySendMessageInTransaction(void *producer, void *msg, PyObject *localTransactionCallback, void *args) {
+    PyUserData userData = {localTransactionCallback, args};
+    PySendResult ret;
+    CSendResult result;
+    SendMessageTransaction((CProducer *) producer, (CMessage *) msg, &PyLocalTransactionExecuteCallback, &userData,
+                           &result);
+    ret.sendStatus = result.sendStatus;
+    ret.offset = result.offset;
+    strncpy(ret.msgId, result.msgId, MAX_MESSAGE_ID_LENGTH - 1);
+    ret.msgId[MAX_MESSAGE_ID_LENGTH - 1] = 0;
+    return ret;
 }
 
 //SendResult
@@ -172,6 +307,15 @@ int PyDestroyPushConsumer(void *consumer) {
     }
     return DestroyPushConsumer(consumerInner);
 }
+int PyDestroyTransactionProducer(void *producer) {
+    CProducer *producerInner = (CProducer *) producer;
+    map<CProducer *, PyObject *>::iterator iter;
+    iter = g_TransactionCheckCallBackMap.find(producerInner);
+    if (iter != g_TransactionCheckCallBackMap.end()) {
+        g_TransactionCheckCallBackMap.erase(iter);
+    }
+    return DestroyProducer(producerInner);
+}
 int PyStartPushConsumer(void *consumer) {
     return StartPushConsumer((CPushConsumer *) consumer);
 }
@@ -192,6 +336,12 @@ int PyRegisterMessageCallback(void *consumer, PyObject *pCallback, object args) 
     CPushConsumer *consumerInner = (CPushConsumer *) consumer;
     g_CallBackMap[consumerInner] = make_pair(pCallback, std::move(args));
     return RegisterMessageCallback(consumerInner, &PythonMessageCallBackInner);
+}
+
+int PyRegisterMessageCallbackOrderly(void *consumer, PyObject *pCallback, object args) {
+    CPushConsumer *consumerInner = (CPushConsumer *) consumer;
+    g_CallBackMap[consumerInner] = make_pair(pCallback, std::move(args));
+    return RegisterMessageCallbackOrderly(consumerInner, &PythonMessageCallBackInner);
 }
 
 int PythonMessageCallBackInner(CPushConsumer *consumer, CMessageExt *msg) {
@@ -223,6 +373,21 @@ int PySetPushConsumerInstanceName(void *consumer, const char *instanceName){
 int PySetPushConsumerSessionCredentials(void *consumer, const char *accessKey, const char *secretKey,
                                        const char *channel){
     return SetPushConsumerSessionCredentials((CPushConsumer *)consumer, accessKey, secretKey, channel);
+}
+int PySetPushConsumerMessageModel(void *consumer, CMessageModel messageModel) {
+    return SetPushConsumerMessageModel((CPushConsumer *) consumer, messageModel);
+}
+
+int PySetPushConsumerLogPath(void *consumer, const char *logPath) {
+    return SetPushConsumerLogPath((CPushConsumer *) consumer, logPath);
+}
+
+int PySetPushConsumerLogFileNumAndSize(void *consumer, int fileNum, long fileSize) {
+    return SetPushConsumerLogFileNumAndSize((CPushConsumer *) consumer, fileNum, fileSize);
+}
+
+int PySetPushConsumerLogLevel(void *consumer, CLogLevel level) {
+    return SetPushConsumerLogLevel((CPushConsumer *) consumer, level);
 }
 
 //push consumer
@@ -264,6 +429,30 @@ BOOST_PYTHON_MODULE (librocketmqclientpython) {
             .def("GetMsgId", &PySendResult::GetMsgId);
     class_<PyMessageExt>("CMessageExt");
 
+    class_<PyMQException>("MQException")
+            .def_readonly("error", &PyMQException::error, "error")
+            .def_readonly("line", &PyMQException::line, "line")
+            .def("GetFile", &PyMQException::GetFile)
+            .def("GetMsg", &PyMQException::GetMsg)
+            .def("GetType", &PyMQException::GetType);
+    enum_<CMessageModel>("CMessageModel")
+            .value("BROADCASTING", BROADCASTING)
+            .value("CLUSTERING", CLUSTERING);
+
+    enum_<CLogLevel>("CLogLevel")
+            .value("E_LOG_LEVEL_FATAL", E_LOG_LEVEL_FATAL)
+            .value("E_LOG_LEVEL_ERROR", E_LOG_LEVEL_ERROR)
+            .value("E_LOG_LEVEL_WARN", E_LOG_LEVEL_WARN)
+            .value("E_LOG_LEVEL_INFO", E_LOG_LEVEL_INFO)
+            .value("E_LOG_LEVEL_DEBUG", E_LOG_LEVEL_DEBUG)
+            .value("E_LOG_LEVEL_TRACE", E_LOG_LEVEL_TRACE)
+            .value("E_LOG_LEVEL_LEVEL_NUM", E_LOG_LEVEL_LEVEL_NUM);
+
+    enum_<CTransactionStatus>("TransactionStatus")
+            .value("E_COMMIT_TRANSACTION", E_COMMIT_TRANSACTION)
+            .value("E_ROLLBACK_TRANSACTION", E_ROLLBACK_TRANSACTION)
+            .value("E_UNKNOWN_TRANSACTION", E_UNKNOWN_TRANSACTION);
+
     //For Message
     def("CreateMessage", PyCreateMessage, return_value_policy<return_opaque_pointer>());
     def("DestroyMessage", PyDestroyMessage);
@@ -285,15 +474,30 @@ BOOST_PYTHON_MODULE (librocketmqclientpython) {
 
     //For producer
     def("CreateProducer", PyCreateProducer, return_value_policy<return_opaque_pointer>());
+    def("CreateTransactionProducer", PyCreateTransactionProducer, return_value_policy<return_opaque_pointer>());
     def("DestroyProducer", PyDestroyProducer);
+    def("DestroyTransactionProducer", PyDestroyTransactionProducer);
     def("StartProducer", PyStartProducer);
     def("ShutdownProducer", PyShutdownProducer);
     def("SetProducerNameServerAddress", PySetProducerNameServerAddress);
     def("SetProducerNameServerDomain", PySetProducerNameServerDomain);
     def("SetProducerInstanceName", PySetProducerInstanceName);
     def("SetProducerSessionCredentials", PySetProducerSessionCredentials);
+    def("SetProducerCompressLevel", PySetProducerCompressLevel);
+    def("SetProducerMaxMessageSize", PySetProducerMaxMessageSize);
+    def("SetProducerSendMsgTimeout", PySetProducerSendMsgTimeout);
+
+    def("SetProducerLogPath", PySetProducerLogPath);
+    def("SetProducerLogFileNumAndSize", PySetProducerLogFileNumAndSize);
+    def("SetProducerLogLevel", PySetProducerLogLevel);
+
     def("SendMessageSync", PySendMessageSync);
+    def("SendMessageAsync", PySendMessageAsync);
+
     def("SendMessageOneway", PySendMessageOneway);
+    def("SendMessageOrderly", PySendMessageOrderly);
+    def("SendMessageOrderlyByShardingKey", PySendMessageOrderlyByShardingKey);
+    def("SendMessageInTransaction", PySendMessageInTransaction);
 
     //For Consumer
     def("CreatePushConsumer", PyCreatePushConsumer, return_value_policy<return_opaque_pointer>());
@@ -308,9 +512,14 @@ BOOST_PYTHON_MODULE (librocketmqclientpython) {
     def("SetPushConsumerSessionCredentials", PySetPushConsumerSessionCredentials);
     def("Subscribe", PySubscribe);
     def("RegisterMessageCallback", PyRegisterMessageCallback);
+    def("RegisterMessageCallbackOrderly", PyRegisterMessageCallbackOrderly);
+    def("SetPushConsumerLogPath", PySetPushConsumerLogPath);
+    def("SetPushConsumerLogFileNumAndSize", PySetPushConsumerLogFileNumAndSize);
+    def("SetPushConsumerLogLevel", PySetPushConsumerLogLevel);
 
     //pull consumer
     def("SetPullConsumerNameServerDomain", PySetPullConsumerNameServerDomain);
+    def("SetPushConsumerMessageModel", PySetPushConsumerMessageModel);
 
     //For Version
     def("GetVersion", PyGetVersion);

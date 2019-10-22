@@ -19,18 +19,30 @@ import __init__
 from librocketmqclientpython import *
 import time
 
-topic = 'test'
+topic = 'test-topic-normal'
+topic_orderly = 'test-topic-normal-orderly'
 name_srv = '127.0.0.1:9876'
 
 
 def init_producer():
     producer = CreateProducer('TestProducer')
+    SetProducerLogLevel(producer, CLogLevel.E_LOG_LEVEL_INFO)
     SetProducerNameServerAddress(producer, name_srv)
     StartProducer(producer)
     return producer
 
+def transaction_local_checker(msg):
+    print 'begin check for msg: ' + GetMessageId(msg)
+    return TransactionStatus.E_COMMIT_TRANSACTION
 
-producer = init_producer()
+def init_transaction_producer():
+    producer = CreateTransactionProducer('TransactionTestProducer', transaction_local_checker)
+    SetProducerLogLevel(producer, CLogLevel.E_LOG_LEVEL_INFO)
+    SetProducerNameServerAddress(producer, name_srv)
+    StartProducer(producer)
+    return producer
+
+producer = init_transaction_producer()
 tag = 'rmq-tag'
 key = 'rmq-key'
 
@@ -198,9 +210,81 @@ def send_delay_messages(producer, topic, count):
         DestroyMessage(msg)
         print 'msg id =' + result.GetMsgId()
 
+def send_message_orderly(count):
+    key = 'rmq-key'
+    print 'start sending order-ly message'
+    tag = 'test'
+    for n in range(count):
+        body = 'hi rmq orderly-message, now is' + str(n)
+        msg = CreateMessage(topic_orderly)
+        SetMessageBody(msg, body)
+        SetMessageKeys(msg, key)
+        SetMessageTags(msg, tag)
+
+        result = SendMessageOrderly(producer, msg, 1, None, calc_which_queue_to_send)
+        DestroyMessage(msg)
+        print 'msg id =' + result.GetMsgId()
+
+def send_message_orderly_with_shardingkey(count):
+    key = 'rmq-key'
+    print 'start sending sharding key order-ly message'
+    tag = 'test'
+    for n in range(count):
+        body = 'hi rmq sharding orderly-message, now is' + str(n)
+        msg = CreateMessage(topic_orderly)
+        SetMessageBody(msg, body)
+        SetMessageKeys(msg, key)
+        SetMessageTags(msg, tag)
+
+        result = SendMessageOrderlyByShardingKey(producer, msg, 'orderId')
+        DestroyMessage(msg)
+        print 'msg id =' + result.GetMsgId()
+
+def calc_which_queue_to_send(size, msg, arg): ## it is index start with 0....
+    return 0
+
+def send_message_async(count):
+    key = 'rmq-key'
+    print 'start sending message'
+    tag = 'test'
+    for n in range(count):
+        body = 'hi rmq message, now is' + str(n)
+        msg = CreateMessage(topic)
+        SetMessageBody(msg, body)
+        SetMessageKeys(msg, key)
+        SetMessageTags(msg, tag)
+
+        SendMessageAsync(producer, msg, send_message_async_success, send_message_async_fail)
+        DestroyMessage(msg)
+    print 'send async message done'
+    time.sleep(10000)
+
+def send_message_async_success(result, msg):
+    print 'send success'
+    print 'msg id =' + result.GetMsgId()
+
+def send_message_async_fail(msg, exception):
+    print 'send message failed'
+    print 'error msg: ' + exception.GetMsg()
+
+def send_transaction_message(count):
+    key = 'rmq-key'
+    print 'start send transaction message'
+    tag = 'test'
+    for n in range(count):
+        body = 'hi rmq message, now is' + str(n)
+        msg = CreateMessage(topic)
+        SetMessageBody(msg, body)
+        SetMessageKeys(msg, key)
+        SetMessageTags(msg, tag)
+
+        SendMessageInTransaction(producer, msg, transaction_local_execute, None)
+    print 'send transaction message done'
+    time.sleep(10000)
+
+def transaction_local_execute(msg, args):
+    print 'begin execute local transaction'
+    return TransactionStatus.E_UNKNOWN_TRANSACTION
 
 if __name__ == '__main__':
-    # print GetVersion()
-    while True:
-        send_messages_oneway(1)
-        time.sleep(1)
+    send_transaction_message(10)

@@ -42,10 +42,12 @@
        ```
        mkdir rocketmqlib
        cd rocketmqlib
-       wget https://opensource-rocketmq-client.oss-cn-hangzhou.aliyuncs.com/cpp-client/linux/1.2.0/RHEL7.x/librocketmq.tar.gz
-       tar -xzf librocketmq.tar.gz
-       sudo cp librocketmq.so librocketmq.a /usr/local/lib/
-       sudo cp -r rocketmq /usr/local/include/
+       wget https://opensource-rocketmq-client.oss-cn-hangzhou.aliyuncs.com/cpp-client/linux/1.2.2/RHEL7.X/rocketmq-client-cpp.tar.gz
+       tar -xzf rocketmq-client-cpp.tar.gz
+       cd rocketmq-client-cpp
+       sudo cp lib/librocketmq.so lib/librocketmq.a /usr/local/lib/
+       mkdir -p /usr/local/include/rocketmq
+       sudo cp -r include/* /usr/local/include/rocketmq
        ```
    
      
@@ -70,23 +72,18 @@
    strings librocketmqclientpython.so |grep PYTHON_CLIENT_VERSION
    ```
 #### macOS Mojave 10.14.2
-* Install compile tools:
+* Compile tools:
     ```
-    - brew install make
-    - brew install cmake
-    - brew install gcc-c++
+    - make: 3.8
+    - cmake 3.12
+    - Apple LLVM(clang) 10
     ```
 * Install dependency:
  
     1. python-devel
-       ```
-       brew install python-devel
-       ```
     
     2. zlib-devel
-       ```
-       brew install zlib-devel
-       ```
+    
     3. boost-python
        ```
        sh install_boostpython.sh

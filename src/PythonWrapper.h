@@ -22,6 +22,7 @@
 #include "CProducer.h"
 #include "CPushConsumer.h"
 #include "CPullConsumer.h"
+#include "CMQException.h"
 #include <boost/python.hpp>
 
 using namespace boost::python;
@@ -36,9 +37,40 @@ typedef struct _PySendResult_ {
     }
 } PySendResult;
 
+typedef struct _PyMQException_ {
+    int error;
+    int line;
+    char file[MAX_EXEPTION_FILE_LENGTH];
+    char msg[MAX_EXEPTION_MSG_LENGTH];
+    char type[MAX_EXEPTION_TYPE_LENGTH];
+
+    const char *GetFile() {
+        return (const char *) file;
+    }
+
+    const char *GetMsg() {
+        return (const char *) msg;
+    }
+
+    const char *GetType() {
+        return (const char *) type;
+    }
+} PyMQException;
+
+
 typedef struct _PyMessageExt_ {
     CMessageExt *pMessageExt;
 } PyMessageExt;
+
+typedef struct _PyUserData_ {
+    PyObject *pyObject;
+    void *pData;
+} PyUserData;
+
+typedef struct _PyCallback_ {
+    PyObject *successCallback;
+    PyObject *exceptionCallback;
+} PyCallback;
 
 #define PYTHON_CLIENT_VERSION "1.2.0"
 #define PYCLI_BUILD_DATE "04-12-2018"
@@ -68,15 +100,37 @@ const char *PyGetMessageId(PyMessageExt msgExt);
 
 //producer
 void *PyCreateProducer(const char *groupId);
+CTransactionStatus PyLocalTransactionCheckerCallback(CProducer *producer, CMessageExt *msg, void *data);
+CTransactionStatus PyLocalTransactionExecuteCallback(CProducer *producer, CMessage *msg, void *data);
+void *PyCreateTransactionProducer(const char *groupId, PyObject *localTransactionCheckerCallback);
+
 int PyDestroyProducer(void *producer);
+int PyDestroyTransactionProducer(void *producer);
 int PyStartProducer(void *producer);
 int PyShutdownProducer(void *producer);
 int PySetProducerNameServerAddress(void *producer, const char *namesrv);
 int PySetProducerNameServerDomain(void *producer, const char *domain);
 int PySetProducerInstanceName(void *producer, const char *instanceName);
 int PySetProducerSessionCredentials(void *producer, const char *accessKey, const char *secretKey, const char *channel);
+int PySetProducerCompressLevel(void *producer, int level);
+int PySetProducerMaxMessageSize(void *producer, int size);
+int PySetProducerLogPath(void *producer, const char *logPath);
+int PySetProducerLogFileNumAndSize(void *producer, int fileNum, long fileSize);
+int PySetProducerLogLevel(void *producer, CLogLevel level);
+int PySetProducerSendMsgTimeout(void *producer, int timeout);
+
 PySendResult PySendMessageSync(void *producer, void *msg);
 int PySendMessageOneway(void *producer, void *msg);
+
+void PySendSuccessCallback(CSendResult result, CMessage *msg, void *pyCallback);
+void PySendExceptionCallback(CMQException e, CMessage *msg, void *pyCallback);
+int PySendMessageAsync(void *producer, void *msg, PyObject *sendSuccessCallback, PyObject *sendExceptionCallback);
+
+PySendResult PySendMessageOrderly(void *producer, void *msg, int autoRetryTimes, void *args, PyObject *queueSelector);
+PySendResult PySendMessageOrderlyByShardingKey(void *producer, void *msg, const char *shardingKey);
+PySendResult PySendMessageInTransaction(void *producer , void *msg, PyObject *localTransactionExecuteCallback , void *args);
+
+int PyOrderlyCallbackInner(int size, CMessage *msg, void *args);
 
 //sendResult
 const char *PyGetSendResultMsgID(CSendResult &sendResult);
@@ -90,12 +144,16 @@ int PySetPushConsumerNameServerAddress(void *consumer, const char *namesrv);
 int PySetPushConsumerNameServerDomain(void *consumer, const char *domain);
 int PySubscribe(void *consumer, const char *topic, const char *expression);
 int PyRegisterMessageCallback(void *consumer, PyObject *pCallback, object args);
+int PyRegisterMessageCallbackOrderly(void *consumer, PyObject *pCallback, object args);
 int PythonMessageCallBackInner(CPushConsumer *consumer, CMessageExt *msg);
 int PySetPushConsumerThreadCount(void *consumer, int threadCount);
 int PySetPushConsumerMessageBatchMaxSize(void *consumer, int batchSize);
 int PySetPushConsumerInstanceName(void *consumer, const char *instanceName);
-int PySetPushConsumerSessionCredentials(void *consumer, const char *accessKey, const char *secretKey,
-                                     const char *channel);
+int PySetPushConsumerSessionCredentials(void *consumer, const char *accessKey, const char *secretKey, const char *channel);
+int PySetPushConsumerMessageModel(void *consumer, CMessageModel messageModel);
+int PySetPushConsumerLogPath(void *consumer, const char *logPath);
+int PySetPushConsumerLogFileNumAndSize(void *consumer, int fileNum, long fileSize);
+int PySetPushConsumerLogLevel(void *consumer, CLogLevel level);
 
 //push consumer
 int PySetPullConsumerNameServerDomain(void *consumer, const char *domain);
